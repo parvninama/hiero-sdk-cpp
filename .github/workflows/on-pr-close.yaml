@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   on-pr-close:
-    runs-on: hiero-client-sdk-linux-large
+    runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
 
     concurrency:
