@@ -368,7 +368,15 @@ async function handleRecommendIssues(botContext) {
     }
 
     const comment = buildRecommendationComment(username, issues);
-    await postComment(botContext, comment);
+    const result = await postComment(botContext, comment);
+
+    if (!result.success) {
+        logger.error('Failed to post recommendation comment', {
+            error: result.error,
+        });
+        return;
+    }
+
     logger.log('Posted recommendation comment');
 }
 

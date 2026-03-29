@@ -76,6 +76,7 @@ module.exports = async ({ github, context }) => {
         await handleRecommendIssues({
             ...botContext,
             issue: linkedIssue,
+            number: linkedIssue.number,
             sender: pr.user,
         });
 
