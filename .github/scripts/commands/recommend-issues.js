@@ -240,12 +240,21 @@ async function getRecommendedIssues(botContext, username, skillLevel, errorState
     ];
 
     for (const level of levelsToTry) {
+        logger.log('recommendation.tryLevel', { level });
+
         const issues = await tryLevel(botContext, username, level, errorState);
 
         if (issues === null) return null;     // API failure
-        if (issues.length > 0) return issues; // first valid result
-    }
 
+        if (issues.length > 0) {             // first valid result
+            logger.log('recommendation.success', {
+                level,
+                count: issues.length,
+            });
+            return issues;
+        }
+        logger.log('recommendation.noResults', { level });
+    }
     return [];
 }
 
@@ -263,7 +272,6 @@ function buildRecommendationComment(username, issues) {
     const list = issues.map(
         (issue) => `- [${issue.title}](${issue.html_url})`
     );
-
     return [
         `👋 Hi @${username}! Great work on your recent contribution! 🎉`,
         '',
@@ -346,9 +354,10 @@ async function handleRecommendIssues(botContext) {
         return;
     }
 
-    logger.log('Recommendation context:', {
+    logger.log('recommendation.context', {
         user: username,
         level: skillLevel,
+        issue: botContext.issue?.number,
     });
 
     const errorState = { hasErrored: false };
@@ -363,21 +372,26 @@ async function handleRecommendIssues(botContext) {
     if (issues === null) return;
 
     if (issues.length === 0) {
-        logger.log('No recommendations available for user:', username);
+        logger.log('recommendation.empty', { user: username });
         return;
     }
 
     const comment = buildRecommendationComment(username, issues);
+    logger.log('recommendation.postComment', {
+        target: botContext.number,
+        issueSource: botContext.issue?.number,
+        recommendations: issues.length,
+    });
     const result = await postComment(botContext, comment);
 
     if (!result.success) {
-        logger.error('Failed to post recommendation comment', {
+        logger.error('recommendation.postCommentFailed', {
             error: result.error,
         });
         return;
     }
 
-    logger.log('Posted recommendation comment');
+    logger.log('recommendation.posted');
 }
 
 module.exports = { handleRecommendIssues };
