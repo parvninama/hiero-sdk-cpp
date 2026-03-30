@@ -9,18 +9,11 @@
 const {
     MAINTAINER_TEAM,
     LABELS,
+    SKILL_HIERARCHY,
     hasLabel,
     postComment,
     getLogger,
 } = require('../helpers');
-
-// Difficulty hierarchy used to determine progression for recommendations
-const SKILL_HIERARCHY = [
-    LABELS.GOOD_FIRST_ISSUE,
-    LABELS.BEGINNER,
-    LABELS.INTERMEDIATE,
-    LABELS.ADVANCED,
-];
 
 // Logger delegation 
 const logger = {
