@@ -70,31 +70,70 @@ function getFallbackLevel(currentLevel) {
 }
 
 /**
- * Fetches open, unassigned issues for a given level.
+ * Groups issues by their matching difficulty level.
  *
- * Uses GitHub search API with basic filters and limits results.
+ * Each issue is assigned to the first matching level in levelsPriority.
+ *
+ * @param {Array<object>} issues
+ * @param {string[]} levelsPriority
+ * @returns {Object<string, Array<object>>} Issues grouped by level.
+ */
+function groupIssuesByLevel(issues, levelsPriority) {
+    const grouped = Object.fromEntries(
+        levelsPriority.map(level => [level, []])
+    );
+
+    for (const issue of issues) {
+        const level = levelsPriority.find(l => hasLabel(issue, l));
+        if (level) grouped[level].push(issue);
+    }
+
+    return grouped;
+}
+
+/**
+ * Returns issues from the highest-priority level with results.
+ *
+ * Limits output to 5 issues.
+ *
+ * @param {Object<string, Array<object>>} grouped
+ * @param {string[]} levelsPriority
+ * @returns {Array<object>} Selected issues or empty array.
+ */
+function pickFirstAvailableLevel(grouped, levelsPriority) {
+    for (const level of levelsPriority) {
+        if (grouped[level].length > 0) {
+            return grouped[level].slice(0, 5);
+        }
+    }
+    return [];
+}
+
+/**
+ * Fetches issues for multiple levels in a single query.
  *
  * @param {object} github
  * @param {string} owner
  * @param {string} repo
- * @param {string} level
- * @returns {Promise<Array<{ title: string, html_url: string }>|null>}
- *   Issues array, or null if API fails.
+ * @param {string[]} levels
+ * @returns {Promise<Array<{ title: string, html_url: string, labels: Array }> | null>}
  */
-async function fetchIssuesByLevel(github, owner, repo, level) {
+async function fetchIssuesBatch(github, owner, repo, levels) {
     try {
+        const labelQuery = levels.map(l => `label:"${l}"`).join(' OR ');
+
         const query = [
             `repo:${owner}/${repo}`,
             'is:issue',
             'is:open',
             'no:assignee',
-            `label:"${level}"`,
+            `(${labelQuery})`,
             `label:"${LABELS.READY_FOR_DEV}"`
         ].join(' ');
 
         const result = await github.rest.search.issuesAndPullRequests({
-        q: query,
-        per_page: 5,
+            q: query,
+            per_page: 10, // slightly higher since we filter later
         });
 
         return result.data.items || [];
@@ -105,110 +144,6 @@ async function fetchIssuesByLevel(github, owner, repo, level) {
         });
         return null;
     }
-}
-
-/**
- * Fetches issues with caching and error handling.
- *
- * - Returns cached results if available
- * - Returns [] if no issues found
- * - Returns null on API failure and stops further execution
- * - Posts a single error comment per run
- *
- * @param {object} botContext
- * @param {string} username
- * @param {string} level
- * @param {{ hasErrored: boolean, stopExecution?: boolean }} errorState
- * @param {Object<string, Array<{ title: string, html_url: string }>>} cache
- * @returns {Promise<Array<{ title: string, html_url: string }>|null>}
- */
-async function safeFetchIssues(botContext, username, level, errorState, cache) {
-    if (cache[level]) {
-        return cache[level];
-    }
-    const issues = await fetchIssuesByLevel(
-        botContext.github,
-        botContext.owner,
-        botContext.repo,
-        level
-    );
-
-    if (issues === null) {
-        if (!errorState.hasErrored) {
-            await postComment(
-                botContext,
-                buildRecommendationErrorComment(username)
-            );
-            errorState.hasErrored = true;
-        }
-        errorState.stopExecution = true;
-        return null;
-    }
-    cache[level] = issues;
-    return issues;
-}
-
-/**
- * Attempts to fetch issues for a level.
- *
- * Skips if level is invalid or execution is stopped.
- * Returns null if API fails.
- *
- * @param {object} botContext
- * @param {string} username
- * @param {string|null} level
- * @param {{ hasErrored: boolean, stopExecution?: boolean }} errorState
- * @param {Object<string, Array<{ title: string, html_url: string }>>} cache
- * @returns {Promise<Array<{ title: string, html_url: string }>|null>}
- */
-async function tryLevel(botContext, username, level, errorState, cache) {
-    if (!level) return [];
-
-    const issues = await safeFetchIssues(botContext, username, level, errorState, cache);
-    if (issues === null) return null;
-
-    return issues;
-}
-
-/**
- * Returns recommended issues using a fallback strategy:
- * next level → same level → lower level.
- *
- * Stops on first non-empty result or API failure.
- *
- * @param {object} botContext
- * @param {string} username
- * @param {string} skillLevel
- * @param {{ hasErrored: boolean, stopExecution?: boolean }} errorState
- * @returns {Promise<Array<{ title: string, html_url: string }>|null>}
- */
-async function getRecommendedIssues(botContext, username, skillLevel, errorState) {
-    const cache = {};
-    const levelsToTry = [
-        getNextLevel(skillLevel),
-        skillLevel,
-        skillLevel !== LABELS.BEGINNER ? getFallbackLevel(skillLevel) : null,
-    ];
-
-    for (const level of levelsToTry) {
-        if (errorState.stopExecution) break;
-
-        logger.log('recommendation.tryLevel', { level });
-
-        const issues = await tryLevel(botContext, username, level, errorState, cache);
-
-        if (issues === null) return null;     // API failure
-
-        if (issues.length > 0) {             // first valid result
-            logger.log('recommendation.success', {
-                level,
-                count: issues.length,
-            });
-            return issues;
-        }
-        logger.log('recommendation.noResults', { level });
-    }
-    return [];
 }
 
 /**
@@ -249,6 +184,49 @@ function buildRecommendationErrorComment(username) {
         '',
         `Sorry for the inconvenience — feel free to explore open issues in the meantime!`,
     ].join('\n');
+}
+
+/**
+ * Returns recommended issues based on priority:
+ * next → same → fallback.
+ *
+ * Uses a single API call and filters results locally.
+ *
+ * @param {object} botContext
+ * @param {string} username
+ * @param {string} skillLevel
+ * @param {{ hasErrored: boolean }} errorState
+ * @returns {Promise<Array<{ title: string, html_url: string }>|null>}
+ */
+async function getRecommendedIssues(botContext, username, skillLevel, errorState) {
+    const fallback = getFallbackLevel(skillLevel);
+
+    const levelsPriority = [
+        getNextLevel(skillLevel),
+        skillLevel,
+        skillLevel !== LABELS.BEGINNER ? fallback : null,
+    ].filter(Boolean);
+
+    const issues = await fetchIssuesBatch(
+        botContext.github,
+        botContext.owner,
+        botContext.repo,
+        levelsPriority
+    );
+
+    if (issues === null) {
+        if (!errorState.hasErrored) {
+            await postComment(
+                botContext,
+                buildRecommendationErrorComment(username)
+            );
+            errorState.hasErrored = true;
+        }
+        return null;
+    }
+
+    const grouped = groupIssuesByLevel(issues, levelsPriority);
+    return pickFirstAvailableLevel(grouped, levelsPriority);
 }
 
 /**
