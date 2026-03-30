@@ -120,12 +120,16 @@ function pickFirstAvailableLevel(grouped, levelsPriority) {
  */
 async function fetchIssuesBatch(github, owner, repo, levels) {
     try {
+        const labelGroups = levels.map(
+            level => `(label:"${LABELS.READY_FOR_DEV}" AND label:"${level}")`
+        );
+
         const query = [
             `repo:${owner}/${repo}`,
             'is:issue',
             'is:open',
             'no:assignee',
-            `label:"${LABELS.READY_FOR_DEV}"`
+            `(${labelGroups.join(' OR ')})`
         ].join(' ');
 
         const result = await github.rest.search.issuesAndPullRequests({
