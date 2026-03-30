@@ -115,26 +115,22 @@ function pickFirstAvailableLevel(grouped, levelsPriority) {
  * @param {object} github
  * @param {string} owner
  * @param {string} repo
- * @param {string[]} levels
  * @returns {Promise<Array<{ title: string, html_url: string, labels: Array }> | null>}
  */
-async function fetchIssuesBatch(github, owner, repo, levels) {
+async function fetchIssuesBatch(github, owner, repo) {
     try {
-        const labelGroups = levels.map(
-            level => `(label:"${LABELS.READY_FOR_DEV}" AND label:"${level}")`
-        );
 
         const query = [
             `repo:${owner}/${repo}`,
             'is:issue',
             'is:open',
             'no:assignee',
-            `(${labelGroups.join(' OR ')})`
+            `label:"${LABELS.READY_FOR_DEV}"`
         ].join(' ');
 
         const result = await github.rest.search.issuesAndPullRequests({
             q: query,
-            per_page: 10, // slightly higher since we filter later
+            per_page: 50,
         });
 
         return result.data.items || [];
@@ -196,14 +192,14 @@ function buildRecommendationErrorComment(username) {
  * @param {object} botContext
  * @param {string} username
  * @param {string} skillLevel
- * @param {{ hasErrored: boolean }} errorState
  * @returns {Promise<Array<{ title: string, html_url: string }>|null>}
  */
-async function getRecommendedIssues(botContext, username, skillLevel, errorState) {
+async function getRecommendedIssues(botContext, username, skillLevel) {
     const fallback = getFallbackLevel(skillLevel);
+    const nextLevel = getNextLevel(skillLevel);
 
     const levelsPriority = [
-        getNextLevel(skillLevel),
+        nextLevel !== skillLevel ? nextLevel : null,
         skillLevel,
         skillLevel !== LABELS.BEGINNER ? fallback : null,
     ].filter(Boolean);
@@ -212,17 +208,13 @@ async function getRecommendedIssues(botContext, username, skillLevel, errorState
         botContext.github,
         botContext.owner,
         botContext.repo,
-        levelsPriority
     );
 
     if (issues === null) {
-        if (!errorState.hasErrored) {
-            await postComment(
-                botContext,
-                buildRecommendationErrorComment(username)
-            );
-            errorState.hasErrored = true;
-        }
+        await postComment(
+            botContext,
+            buildRecommendationErrorComment(username)
+        );
         return null;
     }
 
@@ -238,7 +230,7 @@ async function getRecommendedIssues(botContext, username, skillLevel, errorState
  * - Posts a comment if results exist
  *
  * Skips silently if context is incomplete or no results found.
- * Returns early on API failure (error comment handled upstream).
+ * Returns early on API failure .
  *
  * @param {{
  *   github: object,
@@ -275,13 +267,10 @@ async function handleRecommendIssues(botContext) {
         issue: botContext.issue?.number,
     });
 
-    const errorState = { hasErrored: false };
-
     const issues = await getRecommendedIssues(
         botContext,
         username,
         skillLevel,
-        errorState
     );
 
     if (issues === null) return;
